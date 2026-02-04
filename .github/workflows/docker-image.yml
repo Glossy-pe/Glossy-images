@@ -43,14 +43,16 @@ jobs:
       - name: Create .env file
         run: |
           cat > .env << EOF
-          TUNNEL_TOKEN=${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+          CLOUDFLARE_TUNNEL_TOKEN=${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
           EOF
           
       - name: Pull latest images
-        run: docker-compose pull
+        run: docker compose pull
       
       - name: Restart services
-        run: docker-compose up -d --force-recreate
+        run: docker compose up -d --force-recreate
       
-      - name: Clean up old images
-        run: docker image prune -af
+      - name: Clean up
+        run: |
+          rm -f .env
+          docker image prune -af
