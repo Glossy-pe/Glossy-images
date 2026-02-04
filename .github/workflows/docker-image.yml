@@ -39,7 +39,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+        
+      - name: Create .env file
+        run: |
+          cat > .env << EOF
+          TUNNEL_TOKEN=${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+          EOF
+          
       - name: Pull latest images
         run: docker-compose pull
       
