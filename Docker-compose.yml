@@ -1,0 +1,45 @@
+services:
+  api:
+    image: ricardoyalico/glossy-images:1.0.1
+    container_name: glossy-images
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/glossy-db
+
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    container_name: glossy-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: glossy-db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    ports:
+      - "5432:5432"   # opcional, solo si necesitas acceso externo
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: glossy-cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
