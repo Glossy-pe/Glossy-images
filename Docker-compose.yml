@@ -27,7 +27,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
     ports:
-      - "5432:5432"   # opcional, solo si necesitas acceso externo
+      - "5432:5432"   # Es opcional, solo si necesitas acceso externo
 
   cloudflared:
     image: cloudflare/cloudflared:latest
