@@ -8,6 +8,7 @@ on:
 jobs:
   github-docker-build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -27,12 +28,21 @@ jobs:
           tags: |
             ricardoyalico/glossy-images:${{ github.ref_name }}
             ricardoyalico/glossy-images:latest
+
   server-docker-deploy:
     needs: github-docker-build
     runs-on: [self-hosted, prod]
 
     steps:
+      - name: Checkout infra repo
+        uses: actions/checkout@v4
+        with:
+          repository: Glossy-pe/glossy-infrastructure
+          ref: main
+          path: infra
+
       - name: Deploy images service
         run: |
+          cd infra
           docker compose pull images-service
           docker compose up -d images-service
