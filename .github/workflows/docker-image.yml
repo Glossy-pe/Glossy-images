@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 jobs:
-  docker:
+  github-docker-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,3 +27,12 @@ jobs:
           tags: |
             ricardoyalico/glossy-images:${{ github.ref_name }}
             ricardoyalico/glossy-images:latest
+  server-docker-deploy:
+    needs: github-docker-build
+    runs-on: [self-hosted, prod]
+
+    steps:
+      - name: Deploy images service
+        run: |
+          docker compose pull api
+          docker compose up -d api
