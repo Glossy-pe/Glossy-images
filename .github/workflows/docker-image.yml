@@ -32,17 +32,10 @@ jobs:
   server-docker-deploy:
     needs: github-docker-build
     runs-on: [self-hosted, prod]
-
+  
     steps:
-      - name: Checkout infra repo
-        uses: actions/checkout@v4
-        with:
-          repository: Glossy-pe/glossy-infrastructure
-          ref: main
-          path: infra
-
       - name: Deploy images service
         run: |
-          cd infra
+          cd ~/projects/glossy/infra
           docker compose pull images-service
           docker compose up -d images-service
