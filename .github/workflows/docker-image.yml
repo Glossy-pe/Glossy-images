@@ -43,6 +43,7 @@ jobs:
 
       - name: Deploy images service
         run: |
+          export CLOUDFLARE_TUNNEL_TOKEN="${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}"
           cd infra
           docker compose pull images-service
           docker compose up -d images-service
