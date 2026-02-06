@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 import os
 import uuid
 import shutil
-
+from dotenv import load_dotenv
+load_dotenv()
 from database.database import engine, SessionLocal, Base
 from models.image import Image
 
@@ -127,6 +128,23 @@ def delete_category(category: str, db: Session = Depends(get_db)):
     db.commit()
 
     return {"detail": f"Categoría '{safe_category}' eliminada", "total": len(images)}
+
+@app.get("/images")
+def get_all_images(db: Session = Depends(get_db)):
+    images = db.query(Image).all()
+
+    if not images:
+        return []
+
+    return [
+        {
+            "id": image.id,
+            "filename": image.filename,
+            "category": image.category,
+            "url": f"/images/{image.filename}"
+        }
+        for image in images
+    ]
 
 # -------------------------
 # Servir imagen
