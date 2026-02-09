@@ -73,10 +73,8 @@ def validate_category(category: str) -> str:
     return safe_category
 
 
-# -------------------------
-# CREATE: Upload de imagen
-# -------------------------
-@app.post("/upload")
+
+@app.post("/images", status_code=201)
 async def upload_image(
     category: str = Form(...),
     file: UploadFile = File(...),
@@ -102,160 +100,189 @@ async def upload_image(
             while chunk := await file.read(1024 * 64):
                 await f.write(chunk)
     except Exception as e:
-        if os.path.exists(file_path): os.remove(file_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=500, detail=str(e))
 
     try:
-        image = Image(filename=filename, category=safe_category)
+        image = Image(
+            filename=filename,
+            category=safe_category
+        )
         db.add(image)
         db.commit()
         db.refresh(image)
     except Exception as e:
-        if os.path.exists(file_path): os.remove(file_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"id": image.id, "image_url": f"/images/{filename}"}
+    return {
+        "id": image.id,
+        "filename": image.filename,
+        "category": image.category,
+        "url": f"/images/{image.id}"
+    }
 
-
-# -------------------------
-# UPDATE: Renombrar Categoría
-# -------------------------
-@app.patch("/categories/rename")
-def rename_category(
-    old_name: str = Form(...),
-    new_name: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """Cambia el nombre de una categoría (carpeta y registros)"""
-    safe_old = validate_category(old_name)
-    safe_new = validate_category(new_name)
-
-    old_dir = os.path.join(BASE_UPLOAD_DIR, safe_old)
-    new_dir = os.path.join(BASE_UPLOAD_DIR, safe_new)
-
-    if not os.path.exists(old_dir):
-        raise HTTPException(status_code=404, detail="Categoría origen no existe")
-    if os.path.exists(new_dir):
-        raise HTTPException(status_code=400, detail="La categoría destino ya existe")
-
-    # 1. Renombrar carpeta
-    try:
-        os.rename(old_dir, new_dir)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error renombrando carpeta: {str(e)}")
-
-    # 2. Actualizar DB
-    try:
-        db.query(Image).filter(Image.category == safe_old).update({"category": safe_new})
-        db.commit()
-    except Exception as e:
-        os.rename(new_dir, old_dir)  # Revertir carpeta si falla DB
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error en DB: {str(e)}")
-
-    return {"detail": f"Categoría '{safe_old}' renombrada a '{safe_new}'"}
-
-
-# -------------------------
-# UPDATE: Renombrar Archivo de Imagen
-# -------------------------
-@app.patch("/images/{image_id}/rename")
-def rename_image_file(
+@app.patch("/images/{image_id}")
+def update_image(
     image_id: int,
-    new_filename: str = Form(...),
+    file: UploadFile | None = File(None),
+    filename: str | None = Form(None),
+    category: str | None = Form(None),
     db: Session = Depends(get_db)
 ):
-    """Cambia el nombre del archivo físico de una imagen específica"""
     image = db.query(Image).filter(Image.id == image_id).first()
     if not image:
         raise HTTPException(status_code=404, detail="Imagen no encontrada")
 
-    # Asegurar que mantenga la extensión original por seguridad
-    _, old_ext = os.path.splitext(image.filename)
-    new_base, new_ext = os.path.splitext(new_filename)
-    
-    # Si el usuario no envió extensión o envió una distinta, forzamos la original
-    final_new_filename = f"{new_base}{old_ext}"
+    if not any([file, filename, category]):
+        raise HTTPException(
+            status_code=400,
+            detail="No se enviaron campos para actualizar"
+        )
 
-    old_path = os.path.join(BASE_UPLOAD_DIR, image.category, image.filename)
-    new_path = os.path.join(BASE_UPLOAD_DIR, image.category, final_new_filename)
+    old_filename = image.filename
+    old_category = image.category
 
-    if os.path.exists(new_path):
-        raise HTTPException(status_code=400, detail="Ya existe un archivo con ese nombre")
+    # 🔹 Resolver filename final
+    if filename:
+        _, old_ext = os.path.splitext(old_filename)
+        new_base, _ = os.path.splitext(filename)
+        final_filename = f"{new_base}{old_ext}"
+    else:
+        final_filename = old_filename
+
+    # 🔹 Resolver categoría final
+    final_category = category if category else old_category
+
+    old_path = os.path.join(BASE_UPLOAD_DIR, old_category, old_filename)
+    new_path = os.path.join(BASE_UPLOAD_DIR, final_category, final_filename)
 
     try:
-        if os.path.exists(old_path):
-            os.rename(old_path, new_path)
-        
-        image.filename = final_new_filename
+        os.makedirs(
+            os.path.join(BASE_UPLOAD_DIR, final_category),
+            exist_ok=True
+        )
+
+        # 🔹 Reemplazar contenido del archivo
+        if file:
+            with open(new_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+
+            # Si cambió nombre o categoría, borrar el viejo
+            if new_path != old_path and os.path.exists(old_path):
+                os.remove(old_path)
+
+        # 🔹 Solo mover / renombrar
+        elif new_path != old_path and os.path.exists(old_path):
+            shutil.move(old_path, new_path)
+
+        image.filename = final_filename
+        image.category = final_category
         db.commit()
+
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"detail": "Archivo renombrado", "new_filename": final_new_filename}
+    return {
+        "detail": "Imagen actualizada",
+        "id": image.id,
+        "filename": image.filename,
+        "category": image.category,
+        "file_replaced": bool(file)
+    }
 
-
-# -------------------------
-# UPDATE: Reemplazar contenido (Mantenimiento de nombre)
-# -------------------------
-@app.put("/images/{image_id}/replace")
-async def replace_image_content(
-    image_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db)
-):
-    """Reemplaza el archivo físico por uno nuevo manteniendo el registro y nombre"""
-    image = db.query(Image).filter(Image.id == image_id).first()
-    if not image:
-        raise HTTPException(status_code=404, detail="Imagen no encontrada")
-
-    # Validar que la extensión sea compatible
-    validate_file_extension(file.filename)
-
-    file_path = os.path.join(BASE_UPLOAD_DIR, image.category, image.filename)
-
-    try:
-        # Sobrescribir el archivo existente
-        async with aiofiles.open(file_path, "wb") as f:
-            while chunk := await file.read(1024 * 64):
-                await f.write(chunk)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reemplazando archivo: {str(e)}")
-
-    return {"detail": "Contenido de imagen reemplazado", "filename": image.filename}
-
-
-# -------------------------
-# READ & DELETE (Existentes Optimizados)
-# -------------------------
 @app.get("/images")
 def get_all_images(db: Session = Depends(get_db)):
     images = db.query(Image).all()
-    return [{"id": i.id, "filename": i.filename, "category": i.category, "url": f"/images/{i.filename}", "created_at": i.created_at} for i in images]
 
-@app.get("/images/{filename}")
-def get_image_file(filename: str, db: Session = Depends(get_db)):
-    image = db.query(Image).filter(Image.filename == filename).first()
-    if not image: raise HTTPException(status_code=404)
-    path = os.path.join(BASE_UPLOAD_DIR, image.category, filename)
-    return FileResponse(path)
+    return [
+        {
+            "id": i.id,
+            "filename": i.filename,
+            "category": i.category,
+            "created_at": i.created_at,
+            "url": f"/images/{i.id}"
+        }
+        for i in images
+    ]
 
-@app.delete("/images/{image_id}")
-def delete_image_by_id(image_id: int, db: Session = Depends(get_db)):
+@app.get("/images/{image_id}")
+def get_image_by_id(
+    image_id: int,
+    db: Session = Depends(get_db)
+):
     image = db.query(Image).filter(Image.id == image_id).first()
-    if not image: raise HTTPException(status_code=404)
-    
-    path = os.path.join(BASE_UPLOAD_DIR, image.category, image.filename)
-    if os.path.exists(path): os.remove(path)
-    
-    db.delete(image)
-    db.commit()
-    return {"detail": "Imagen eliminada"}
+    if not image:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
 
-@app.delete("/images/category/{category}")
-def delete_category(category: str, db: Session = Depends(get_db)):
+    return {
+        "id": image.id,
+        "filename": image.filename,
+        "category": image.category,
+        "created_at": image.created_at,
+        "file_url": f"/images/{image.id}/file"
+    }
+
+@app.get("/images/{image_id}/file")
+def get_image_file(
+    image_id: int,
+    db: Session = Depends(get_db)
+):
+    image = db.query(Image).filter(Image.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+
+    path = os.path.join(
+        BASE_UPLOAD_DIR,
+        image.category,
+        image.filename
+    )
+
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=image.filename
+    )
+
+@app.delete("/images/{image_id}", status_code=200)
+def delete_image_by_id(
+    image_id: int,
+    db: Session = Depends(get_db)
+):
+    image = db.query(Image).filter(Image.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+
+    path = os.path.join(
+        BASE_UPLOAD_DIR,
+        image.category,
+        image.filename
+    )
+
+    try:
+        # 🔹 Borrar archivo físico (si existe)
+        if os.path.exists(path):
+            os.remove(path)
+
+        # 🔹 Borrar DB
+        db.delete(image)
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Error eliminando imagen"
+        )
+
+    return {"detail": "Imagen eliminada"}
     safe_cat = validate_category(category)
     cat_dir = os.path.join(BASE_UPLOAD_DIR, safe_cat)
     if os.path.exists(cat_dir): shutil.rmtree(cat_dir)
