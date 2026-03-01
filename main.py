@@ -23,7 +23,7 @@ app = FastAPI(title="Image Management API - CRUD Extendido")
 # 🌍 CORS — SIEMPRE primero
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "https://glossy-web.mimarca.pe", "https://glossy-web.mimarca.pe"],
+    allow_origins=["http://localhost:4200", "https://glossy-web.mimarca.pe", "https://glossy.mimarca.pe"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
