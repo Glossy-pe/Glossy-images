@@ -7,7 +7,7 @@ DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "ricardoyalico")
+DB_NAME = os.getenv("DB_NAME", "glossy_local")
 
 # Validar que existan las variables críticas
 if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_NAME]):
