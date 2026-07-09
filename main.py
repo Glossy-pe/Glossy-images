@@ -9,6 +9,7 @@ import shutil
 import hashlib
 import aiofiles
 from dotenv import load_dotenv
+from cachetools import TTLCache
 
 load_dotenv()
 from database.database import engine, SessionLocal, Base
@@ -18,6 +19,8 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Image Management API - CRUD Extendido")
 
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:4200", "https://glossy-web.mimarca.pe", "https://glossy.mimarca.pe"],
@@ -26,14 +29,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.add_middleware(
-    GZipMiddleware,
-    minimum_size=1000,
-)
+# app.add_middleware(
+#     GZipMiddleware,
+#     minimum_size=1000,
+# )
 
 BASE_UPLOAD_DIR = "images"
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "jfif", "avif"}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+_image_path_cache = TTLCache(maxsize=5000, ttl=300)
 
 # Mapa de extensión → MIME type correcto
 MIME_TYPES = {
@@ -73,28 +78,30 @@ def validate_category(category: str) -> str:
     return safe_category
 
 
-def build_etag(path: str) -> str:
+def build_etag(stat: os.stat_result) -> str:
     """ETag basado en tamaño + fecha de modificación (sin leer el archivo)."""
-    stat = os.stat(path)
     raw = f"{stat.st_size}-{stat.st_mtime}"
     return hashlib.md5(raw.encode()).hexdigest()
 
+def _get_image_record(image_id: int, db: Session) -> Image:
+    cached = _image_path_cache.get(image_id)
+    if cached:
+        return cached
+    image = db.query(Image).filter(Image.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    _image_path_cache[image_id] = image
+    return image
 
 def serve_image(path: str, filename: str, request: Request) -> Response:
-    """
-    Sirve un archivo de imagen con headers de caché correctos.
-    - Cache-Control: 1 año para assets inmutables (el nombre incluye UUID).
-    - ETag + Last-Modified para validación condicional.
-    - Responde 304 Not Modified si el cliente ya tiene la versión actual.
-    """
-    if not os.path.exists(path):
+    try:
+        stat = os.stat(path)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
-    stat = os.stat(path)
-    etag = build_etag(path)
+    etag = build_etag(stat)
     last_modified = stat.st_mtime
 
-    # Validación condicional — el cliente ya tiene la imagen
     if_none_match = request.headers.get("if-none-match")
     if if_none_match and if_none_match == f'"{etag}"':
         return Response(status_code=304)
@@ -103,7 +110,6 @@ def serve_image(path: str, filename: str, request: Request) -> Response:
     ext_clean = ext.lower().lstrip(".")
     media_type = MIME_TYPES.get(ext_clean, "application/octet-stream")
 
-    # 1 año de caché — válido porque el filename incluye UUID (cambia si se reemplaza)
     response = FileResponse(
         path,
         media_type=media_type,
@@ -116,7 +122,6 @@ def serve_image(path: str, filename: str, request: Request) -> Response:
 
     return response
 
-
 # -------------------------
 # Endpoints (sin cambios en firma)
 # -------------------------
@@ -127,6 +132,8 @@ async def upload_image(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
+    print(f"category={category!r}, filename={file.filename!r}")
+    
     safe_category = validate_category(category)
     ext = validate_file_extension(file.filename)
 
@@ -214,6 +221,7 @@ def update_image(
         image.filename = final_filename
         image.category = final_category
         db.commit()
+        _image_path_cache.pop(image_id, None)  # 👈 invalidar
 
     except Exception as e:
         db.rollback()
@@ -259,10 +267,7 @@ def get_image_by_id(image_id: int, db: Session = Depends(get_db)):
 
 @app.get("/images/{image_id}/file")
 def get_image_file(image_id: int, request: Request, db: Session = Depends(get_db)):
-    image = db.query(Image).filter(Image.id == image_id).first()
-    if not image:
-        raise HTTPException(status_code=404, detail="Imagen no encontrada")
-
+    image = _get_image_record(image_id, db)
     path = os.path.join(BASE_UPLOAD_DIR, image.category, image.filename)
     return serve_image(path, image.filename, request)
 
@@ -280,6 +285,7 @@ def delete_image_by_id(image_id: int, db: Session = Depends(get_db)):
             os.remove(path)
         db.delete(image)
         db.commit()
+        _image_path_cache.pop(image_id, None)  # 👈 invalidar
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail="Error eliminando imagen")
